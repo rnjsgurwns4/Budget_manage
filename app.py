@@ -1,5 +1,4 @@
 from flask import Flask, jsonify, render_template, request, redirect, url_for
-import mysql.connector
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask import session
@@ -9,17 +8,27 @@ import os
 import re
 
 
+from sshtunnel import SSHTunnelForwarder
+import pymysql
+
+
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
-# MySQL 데이터베이스 연결 설정
-conn = mysql.connector.connect(
-    host="127.0.0.1",      # MySQL 서버 주소
-    user="root",        # MySQL 사용자 이름
-    password="kwon0822@",    # MySQL 비밀번호
-    database="budget_db"    # 사용할 데이터베이스 이름
-)
-cursor = conn.cursor()
+# SSH 설정
+ssh_host = "cs.dongguk.edu"
+ssh_port = 101
+ssh_user = "2020112560"
+ssh_password = "kwon0822@"
+
+# MySQL 설정 (학교 서버 내 MySQL 정보)
+mysql_user = "root"       # MySQL 사용자명
+mysql_password = "kwon0822@"   # MySQL 비밀번호
+mysql_db = "budget_db"            # 사용할 데이터베이스 이름
+mysql_socket = "/home/2020112560/socket"  # MySQL 소켓 경로
+mysql_port = 4224  # MySQL 포트
+mysql_bin_path = "/home/2020112560/mysql/bin/mysql"  # MySQL 실행 경로
+
 
 # 홈 페이지 - 거래 내역 조회
 @app.route('/index')
@@ -59,7 +68,8 @@ def index(page=1):
 @app.route('/add', methods=["GET", "POST"])
 def add_transaction():
     if request.method == "POST":
-        
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
         user_id = session['user_id']  # 세션에서 user_id 가져오기
         date = datetime.now().strftime("%Y-%m-%d")
         amount = int(request.form["amount"])
@@ -72,9 +82,8 @@ def add_transaction():
             amount = -abs(amount)
         
         cursor.execute('''
-            INSERT INTO transactions (date, amount, category, description) 
-            VALUES (%s, %s, %s, %s)
-            WHERE user_id = %s
+            INSERT INTO transactions (date, amount, category, description, user_id) 
+            VALUES (%s, %s, %s, %s, %s)
         ''', (date, amount, category, description, user_id))
         conn.commit()
         return redirect(url_for('index'))
@@ -84,6 +93,8 @@ def add_transaction():
 @app.route('/edit/<int:id>', methods=["GET", "POST"])
 def edit_transaction(id):
     if request.method == "POST":
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
         user_id = session['user_id']  # 세션에서 user_id 가져오기
         amount = int(request.form["amount"])
         category = request.form["category"]
@@ -109,7 +120,8 @@ def delete_transaction(id):
 # 통계 화면
 @app.route('/stats')
 def stats():
-    
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
     user_id = session['user_id']  # 세션에서 user_id 가져오기
     now = datetime.now()
     start_date = now - timedelta(days=2*365)
@@ -117,7 +129,7 @@ def stats():
     # 날짜 범위 계산
     cursor.execute('''
         SELECT 
-            DATE_FORMAT(date, '%Y-%m') AS month,
+            DATE_FORMAT(date, '%%Y-%%m') AS month,
             SUM(amount) AS total
         FROM transactions
         WHERE date >= %s AND user_id = %s
@@ -133,6 +145,8 @@ def stats():
 # 통계 세부
 @app.route('/stats_data')
 def stats_data():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
     user_id = session['user_id']  # 세션에서 user_id 가져오기
     range_option = request.args.get('range', '2years')
 
@@ -150,7 +164,7 @@ def stats_data():
     # 데이터 가져오기
     cursor.execute('''
         SELECT 
-            DATE_FORMAT(date, '%Y-%m') AS month,
+            DATE_FORMAT(date, '%%Y-%%m') AS month,
             SUM(amount) AS total
         FROM transactions
         WHERE date >= %s AND user_id = %s
@@ -170,6 +184,8 @@ def stats_data():
 def budget():
     # 사용자가 월별 예산을 선택
     if request.method == "POST":
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
         user_id = session['user_id']  # 세션에서 user_id 가져오기
         year = int(request.form["year"])
         month = int(request.form["month"])
@@ -219,20 +235,37 @@ def budget():
 @app.route('/set_budget', methods=["GET", "POST"])
 def set_budget():
     if request.method == "POST":
+        
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        
         user_id = session['user_id']  # 세션에서 user_id 가져오기
         year = int(request.form["year"])
         month = int(request.form["month"])
         budget_amount = int(request.form["budget_amount"])
+        
+        cursor.execute('''
+            SELECT * FROM budgets WHERE user_id = %s AND year = %s AND month = %s
+        ''', (user_id, year, month))
+        existing_budget = cursor.fetchone()
+        
+        if existing_budget:
+            # 예산이 존재하면 업데이트
+            cursor.execute('''
+                UPDATE budgets
+                SET budget_amount = %s
+                WHERE user_id = %s AND year = %s AND month = %s
+            ''', (budget_amount, user_id, year, month))
 
         # 예산 삽입 또는 업데이트
-        cursor.execute('''
-            INSERT INTO budgets (year, month, budget_amount)
-            VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE budget_amount = %s
-            WHERE user_id = %s
-        ''', (year, month, budget_amount, budget_amount, user_id))
+        else:
+            # 예산이 없으면 새로운 레코드 삽입
+            cursor.execute('''
+                INSERT INTO budgets (year, month, budget_amount, user_id)
+                VALUES (%s, %s, %s, %s)
+            ''', (year, month, budget_amount, user_id))
         conn.commit()
-        return redirect(url_for('budget'))
+        return render_template('set_budget.html', success="저장했습니다.")
 
     return render_template("set_budget.html")
 
@@ -402,4 +435,19 @@ def generate_temp_password(length=8):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    with SSHTunnelForwarder(
+            ('cs.dongguk.edu', 101),
+            ssh_username='2020112560',
+            ssh_password=ssh_password,
+            remote_bind_address=('localhost', 4224),
+            local_bind_address=('localhost', 4224),
+        ) as tunnel:
+        conn = pymysql.connect(
+            user='root',
+            password=mysql_password,
+            host='localhost',
+            port=tunnel.local_bind_port,
+            database='budget_db',
+        )
+        cursor = conn.cursor()
+        app.run(debug=True)

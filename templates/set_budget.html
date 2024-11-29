@@ -71,12 +71,16 @@
         <label for="budget_amount">예산 금액:</label>
         <input type="number" name="budget_amount" min="0" step="1000" required><br>
         </div>
-        
+
         <div style = "margin-bottom: 10px; display: block; text-align: center;">
         <button type="submit">저장</button>
         </div>
     
     </form>
 </div>
+
+    {% if success %}
+        <p style="color: black; position: absolute; top: 55%; left: 50%; transform: translate(-50%, -50%);">{{ success }}</p>
+    {% endif %}
 </body>
 </html>
