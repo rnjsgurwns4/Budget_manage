@@ -25,9 +25,8 @@ ssh_password = "kwon0822@"
 mysql_user = "root"       # MySQL 사용자명
 mysql_password = "kwon0822@"   # MySQL 비밀번호
 mysql_db = "budget_db"            # 사용할 데이터베이스 이름
-mysql_socket = "/home/2020112560/socket"  # MySQL 소켓 경로
 mysql_port = 4224  # MySQL 포트
-mysql_bin_path = "/home/2020112560/mysql/bin/mysql"  # MySQL 실행 경로
+
 
 
 # 홈 페이지 - 거래 내역 조회
@@ -436,18 +435,18 @@ def generate_temp_password(length=8):
 
 if __name__ == "__main__":
     with SSHTunnelForwarder(
-            ('cs.dongguk.edu', 101),
-            ssh_username='2020112560',
+            (ssh_host, ssh_port),
+            ssh_username=ssh_user,
             ssh_password=ssh_password,
-            remote_bind_address=('localhost', 4224),
-            local_bind_address=('localhost', 4224),
+            remote_bind_address=('localhost', mysql_port),
+            local_bind_address=('localhost', mysql_port),
         ) as tunnel:
         conn = pymysql.connect(
-            user='root',
+            user=mysql_user,
             password=mysql_password,
             host='localhost',
             port=tunnel.local_bind_port,
-            database='budget_db',
+            database=mysql_db,
         )
         cursor = conn.cursor()
         app.run(debug=True)
